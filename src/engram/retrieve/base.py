@@ -7,7 +7,7 @@ from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from engram.models import Fact
+from engram.models import Fact, LifecycleState, MemorySystem
 
 
 class ScoredFact(BaseModel):
@@ -49,6 +49,16 @@ class RetrievalConfig(BaseModel):
     # `superseded_by` is set are excluded from results — only the canonical
     # latest version surfaces. Set False to include the full history.
     exclude_superseded: bool = True
+
+    # Typed-memory filters. Optional so legacy recall behavior is unchanged.
+    memory_systems: tuple[MemorySystem, ...] | None = None
+    memory_subtypes: tuple[str, ...] | None = None
+    tags: tuple[str, ...] | None = None
+    include_lifecycle_states: tuple[LifecycleState, ...] | None = None
+    exclude_lifecycle_states: tuple[LifecycleState, ...] = (
+        LifecycleState.EXPIRED,
+        LifecycleState.SUPERSEDED,
+    )
 
 
 @runtime_checkable
