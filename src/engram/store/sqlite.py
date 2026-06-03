@@ -32,6 +32,21 @@ def _load_schema() -> str:
     return (files("engram.store") / "schema.sql").read_text(encoding="utf-8")
 
 
+_MIGRATE_TO_V2 = """
+-- v2: promote typed memory fields from metadata JSON to dedicated columns
+ALTER TABLE facts ADD COLUMN memory_system TEXT;
+ALTER TABLE facts ADD COLUMN memory_subtype TEXT;
+ALTER TABLE facts ADD COLUMN secondary_systems TEXT;
+ALTER TABLE facts ADD COLUMN tags TEXT;
+ALTER TABLE facts ADD COLUMN lifecycle_state TEXT;
+ALTER TABLE facts ADD COLUMN promotion_state TEXT;
+ALTER TABLE facts ADD COLUMN retrieval_policy TEXT;
+ALTER TABLE facts ADD COLUMN valid_until TEXT;
+CREATE INDEX IF NOT EXISTS idx_facts_memory_system ON facts(org_id, user_id, memory_system);
+CREATE INDEX IF NOT EXISTS idx_facts_lifecycle ON facts(org_id, user_id, lifecycle_state);
+"""
+
+
 def _dt(dt: datetime | None) -> str | None:
     return dt.isoformat() if dt else None
 
@@ -40,6 +55,31 @@ def _parse_dt(s: str | None) -> datetime | None:
     if s is None:
         return None
     return datetime.fromisoformat(s)
+
+
+async def _populate_typed_columns_from_metadata(conn: aiosqlite.Connection) -> None:
+    rows = await conn.execute_fetchall(
+        "SELECT rowid, id, metadata FROM facts WHERE memory_system IS NULL"
+    )
+    for rowid, _fid, md_json in rows:
+        md = json.loads(md_json) if md_json else {}
+        typed = md.get(_TYPED_MEMORY_METADATA_KEY, md)
+        ms = typed.get("memory_system", "working")
+        ms_sub = typed.get("memory_subtype")
+        secondary = json.dumps(typed.get("secondary_systems", []))
+        tags = json.dumps(typed.get("tags", []))
+        lc = typed.get("lifecycle_state", "durable")
+        ps = typed.get("promotion_state", "raw")
+        rp = typed.get("retrieval_policy")
+        vu = typed.get("valid_until")
+        await conn.execute(
+            """UPDATE facts SET
+                memory_system=?, memory_subtype=?, secondary_systems=?,
+                tags=?, lifecycle_state=?, promotion_state=?,
+                retrieval_policy=?, valid_until=?
+            WHERE rowid=?""",
+            (ms, ms_sub, secondary, tags, lc, ps, rp, vu, rowid),
+        )
 
 
 def _metadata_with_typed_fields(fact: Fact) -> dict[str, Any]:
@@ -198,6 +238,15 @@ class SqliteStore:
         conn = await aiosqlite.connect(str(path))
         conn.row_factory = aiosqlite.Row
         await conn.executescript(_load_schema())
+        cursor = await conn.execute(
+            "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
+        )
+        row = await cursor.fetchone()
+        current_version = row[0] if row else 0
+        if current_version < 2:
+            await conn.executescript(_MIGRATE_TO_V2)
+            await conn.execute("INSERT INTO schema_version (version) VALUES (2)")
+            await _populate_typed_columns_from_metadata(conn)
         await conn.commit()
         return cls(conn)
 
@@ -219,6 +268,8 @@ class SqliteStore:
 
     async def upsert_fact(self, fact: Fact) -> None:
         try:
+            tags_json = json.dumps(fact.tags)
+            secondary_json = json.dumps([s.value for s in fact.secondary_systems])
             await self._conn.execute(
                 """
                 INSERT INTO facts (
@@ -227,8 +278,12 @@ class SqliteStore:
                     event_date, mention_date, source_event_id,
                     source_message_id, source_span_start, source_span_end,
                     supersedes, superseded_by,
-                    access_count, last_accessed, metadata, session_id
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    access_count, last_accessed, metadata, session_id,
+                    memory_system, memory_subtype, secondary_systems,
+                    tags, lifecycle_state, promotion_state,
+                    retrieval_policy, valid_until
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
+                          ?,?,?,?,?,?,?,?)
                 ON CONFLICT(id) DO UPDATE SET
                     text=excluded.text,
                     valid_from=excluded.valid_from,
@@ -248,7 +303,15 @@ class SqliteStore:
                     access_count=excluded.access_count,
                     last_accessed=excluded.last_accessed,
                     metadata=excluded.metadata,
-                    session_id=excluded.session_id
+                    session_id=excluded.session_id,
+                    memory_system=excluded.memory_system,
+                    memory_subtype=excluded.memory_subtype,
+                    secondary_systems=excluded.secondary_systems,
+                    tags=excluded.tags,
+                    lifecycle_state=excluded.lifecycle_state,
+                    promotion_state=excluded.promotion_state,
+                    retrieval_policy=excluded.retrieval_policy,
+                    valid_until=excluded.valid_until
                 """,
                 (
                     str(fact.id),
@@ -273,6 +336,14 @@ class SqliteStore:
                     _dt(fact.last_accessed),
                     json.dumps(_metadata_with_typed_fields(fact)),
                     fact.session_id,
+                    fact.memory_system.value,
+                    fact.memory_subtype,
+                    secondary_json,
+                    tags_json,
+                    fact.lifecycle_state.value,
+                    fact.promotion_state.value,
+                    fact.retrieval_policy,
+                    _dt(fact.valid_until),
                 ),
             )
             await self._conn.commit()
@@ -608,6 +679,37 @@ class SqliteStore:
         typed_metadata = _typed_memory_metadata(metadata)
         user_metadata = dict(metadata)
         user_metadata.pop(_TYPED_MEMORY_METADATA_KEY, None)
+
+        col_val = lambda name: row[name]  # noqa: E731
+        ms_raw = col_val("memory_system")
+        ms = str(ms_raw) if ms_raw else _memory_system_from_metadata(typed_metadata).value
+        ms_sub_raw = col_val("memory_subtype")
+        ms_sub = str(ms_sub_raw) if ms_sub_raw else _memory_subtype_from_metadata(typed_metadata)
+        secondary_raw = col_val("secondary_systems")
+        secondary_list: list[MemorySystem] | list[str]
+        if secondary_raw and isinstance(secondary_raw, str):
+            secondary_list = json.loads(secondary_raw)
+        elif secondary_raw:
+            secondary_list = list(secondary_raw)
+        else:
+            secondary_list = _secondary_systems_from_metadata(typed_metadata)
+        tags_raw = col_val("tags")
+        tags_list: list[str]
+        if tags_raw and isinstance(tags_raw, str):
+            tags_list = json.loads(tags_raw)
+        elif tags_raw:
+            tags_list = list(tags_raw)
+        else:
+            tags_list = _tags_from_metadata(typed_metadata)
+        lc_raw = col_val("lifecycle_state")
+        lc = str(lc_raw) if lc_raw else _lifecycle_state_from_metadata(typed_metadata).value
+        ps_raw = col_val("promotion_state")
+        ps = str(ps_raw) if ps_raw else _promotion_state_from_metadata(typed_metadata).value
+        rp_raw = col_val("retrieval_policy")
+        rp = str(rp_raw) if rp_raw else _retrieval_policy_from_metadata(typed_metadata)
+        vu_raw = col_val("valid_until")
+        vu = str(vu_raw) if vu_raw else _valid_until_from_metadata(typed_metadata)
+
         return Fact(
             id=UUID(row["id"]),
             text=row["text"],
@@ -618,14 +720,17 @@ class SqliteStore:
             category=row["category"],
             polarity=Polarity(row["polarity"]),
             tier=MemoryTier(row["tier"]),
-            memory_system=_memory_system_from_metadata(typed_metadata),
-            memory_subtype=_memory_subtype_from_metadata(typed_metadata),
-            secondary_systems=_secondary_systems_from_metadata(typed_metadata),
-            tags=_tags_from_metadata(typed_metadata),
-            lifecycle_state=_lifecycle_state_from_metadata(typed_metadata),
-            promotion_state=_promotion_state_from_metadata(typed_metadata),
-            retrieval_policy=_retrieval_policy_from_metadata(typed_metadata),
-            valid_until=_valid_until_from_metadata(typed_metadata),
+            memory_system=MemorySystem(str(ms)),
+            memory_subtype=str(ms_sub) if ms_sub else None,
+            secondary_systems=(
+                [MemorySystem(s) for s in secondary_list if isinstance(s, str)]
+                if secondary_list else []
+            ),
+            tags=[str(t) for t in tags_list] if tags_list else [],
+            lifecycle_state=LifecycleState(str(lc)),
+            promotion_state=PromotionState(str(ps)),
+            retrieval_policy=str(rp) if rp else None,
+            valid_until=_parse_dt(str(vu)) if vu else None,
             event_date=_parse_dt(row["event_date"]),
             mention_date=_parse_dt(row["mention_date"]),
             source_event_id=row["source_event_id"],
