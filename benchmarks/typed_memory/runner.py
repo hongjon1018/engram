@@ -4,14 +4,14 @@
 Usage:
     uv run python -m benchmarks.typed_memory.runner
     uv run python -m benchmarks.typed_memory.runner --fixtures fixtures.json --top-k 5 10 20
-    uv run python -m benchmarks.typed_memory.runner --output-json /tmp/results.json --output-md /tmp/results.md
+    uv run python -m benchmarks.typed_memory.runner \\
+        --output-json /tmp/results.json --output-md /tmp/results.md
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import math
 import random
 import sys
 import time
@@ -20,7 +20,6 @@ from pathlib import Path
 from typing import Any
 
 from engram import Engram, MemorySystem
-
 
 # ── fixture model ──────────────────────────────────────────────────────────
 
@@ -162,8 +161,14 @@ async def _run_task(
         latency = (time.perf_counter() - t0) * 1000
         retrieval_texts = [sf.fact.text for sf in results]
 
-    found_expected = [t for t in task.expected_retrieval_contains if any(t in r for r in retrieval_texts)]
-    found_forbidden = [t for t in task.forbidden_retrieval_contains if any(t in r for r in retrieval_texts)]
+    found_expected = [
+        t for t in task.expected_retrieval_contains
+        if any(t in r for r in retrieval_texts)
+    ]
+    found_forbidden = [
+        t for t in task.forbidden_retrieval_contains
+        if any(t in r for r in retrieval_texts)
+    ]
     matched_system = None
 
     if results and task.expected_memory_systems:
@@ -226,7 +231,7 @@ async def run_benchmark(
     per_arm: dict[str, list[TaskResult]] = {a: [] for a in arms}
     total = len(tasks)
 
-    for i, task in enumerate(tasks):
+    for task in tasks:
         for arm in arms:
             result = await _run_task(task, arm, top_k)
             per_arm[arm].append(result)

@@ -15,7 +15,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-
 # ── distractor pools ───────────────────────────────────────────────────────
 
 
@@ -187,10 +186,8 @@ def generate(
         original_events = list(base_task["setup_events"])
 
         same_pool = _system_pool(primary_system)
-        cross_pools = [
-            s for s in ["semantic", "procedural", "episodic", "working", "prospective", "preference"]
-            if s != primary_system
-        ]
+        all_systems = ["semantic", "procedural", "episodic", "working", "prospective", "preference"]
+        cross_pools = [s for s in all_systems if s != primary_system]
 
         same_chosen = rng.sample(same_pool, min(same_system_n, len(same_pool))) if same_pool else []
         for text in same_chosen:

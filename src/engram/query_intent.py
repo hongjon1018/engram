@@ -4,17 +4,26 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import Literal
 
 from engram.models import MemorySystem
+
+IntentConfidence = Literal["low", "medium", "high"]
 
 
 @dataclass(frozen=True)
 class QueryMemoryIntent:
-    """Typed-memory filters inferred from a retrieval query."""
+    """Typed-memory filters inferred from a retrieval query.
+
+    ``confidence`` controls how the filters are applied:
+    - ``low`` / ``medium`` → boost matching facts in scoring (no strict narrowing)
+    - ``high`` → narrow retrieval to matching systems (current strict behavior)
+    """
 
     memory_systems: tuple[MemorySystem, ...] | None = None
     memory_subtypes: tuple[str, ...] | None = None
     tags: tuple[str, ...] | None = None
+    confidence: IntentConfidence = "medium"
     reason: str = "no typed query intent detected"
 
 
@@ -59,15 +68,19 @@ def _preference_intent(query: str) -> QueryMemoryIntent | None:
         return None
     subtype = None
     tags: tuple[str, ...] | None = None
+    confidence: IntentConfidence = "medium"
     if _has_any(query, ("package manager", "pnpm", "npm", "yarn", "bun")):
         subtype = "tool_preference"
         tags = tuple(tag for tag in ("pnpm", "npm", "yarn", "bun") if tag in query) or None
+        confidence = "high" if tags else "medium"
     elif _has_any(query, ("communication", "style", "concise", "detailed", "explain")):
         subtype = "communication_style"
+        confidence = "high"
     return QueryMemoryIntent(
         memory_systems=(MemorySystem.PREFERENCE,),
         memory_subtypes=(subtype,) if subtype is not None else None,
         tags=tags,
+        confidence=confidence,
         reason="query asks for a user/project preference",
     )
 
@@ -91,13 +104,17 @@ def _procedural_intent(query: str) -> QueryMemoryIntent | None:
     ):
         return None
     subtype = None
+    confidence: IntentConfidence = "medium"
     if _has_any(query, ("release", "deploy", "changelog", "version", "ship")):
         subtype = "release_process"
+        confidence = "high"
     elif _has_any(query, ("test", "validation", "validate", "check")):
         subtype = "validation_recipe"
+        confidence = "high"
     return QueryMemoryIntent(
         memory_systems=(MemorySystem.PROCEDURAL,),
         memory_subtypes=(subtype,) if subtype is not None else None,
+        confidence=confidence,
         reason="query asks for a reusable procedure",
     )
 
@@ -111,6 +128,7 @@ def _prospective_intent(query: str) -> QueryMemoryIntent | None:
     return QueryMemoryIntent(
         memory_systems=(MemorySystem.PROSPECTIVE,),
         memory_subtypes=("trigger",),
+        confidence="medium",
         reason="query asks for future-oriented work",
     )
 
@@ -131,8 +149,12 @@ def _episodic_intent(query: str) -> QueryMemoryIntent | None:
         ),
     ):
         return None
+    confidence: IntentConfidence = "medium"
+    if _has_any(query, ("incident", "debugged", "history")):
+        confidence = "high"
     return QueryMemoryIntent(
         memory_systems=(MemorySystem.EPISODIC,),
+        confidence=confidence,
         reason="query asks for a past event or episode",
     )
 
@@ -142,6 +164,7 @@ def _working_intent(query: str) -> QueryMemoryIntent | None:
         return None
     return QueryMemoryIntent(
         memory_systems=(MemorySystem.WORKING,),
+        confidence="low",
         reason="query asks for current working-memory state",
     )
 
@@ -151,6 +174,7 @@ def _semantic_intent(query: str) -> QueryMemoryIntent | None:
         return None
     return QueryMemoryIntent(
         memory_systems=(MemorySystem.SEMANTIC,),
+        confidence="low",
         reason="query asks for durable factual knowledge",
     )
 

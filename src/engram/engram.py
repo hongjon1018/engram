@@ -384,15 +384,25 @@ class Engram:
         exclude_lifecycle_states: tuple[LifecycleState | str, ...] | None = None,
         infer_memory_filters: bool = False,
     ) -> list[ScoredFact]:
-        """Hybrid (vector + keyword) retrieval, optionally reranked."""
+        """Hybrid (vector + keyword) retrieval, optionally reranked.
+
+        When ``infer_memory_filters=True``, the query intent classifier
+        determines both the memory filters and confidence level.
+
+        - ``high`` confidence → strict system/subtype/tag filtering (current behavior).
+        - ``low`` / ``medium`` confidence → matching facts get a score boost
+          but non-matching facts are still included (soft boost).
+        """
         typed_systems = _coerce_memory_systems(memory_systems)
         typed_subtypes = memory_subtypes
         typed_tags = tags
+        intent_confidence: str | None = None
         if infer_memory_filters:
             intent = self._query_intent.classify(query)
             typed_systems = typed_systems or intent.memory_systems
             typed_subtypes = typed_subtypes or intent.memory_subtypes
             typed_tags = typed_tags or intent.tags
+            intent_confidence = intent.confidence
         return await self._retrieve.search(
             query,
             Scope(org_id=org_id, user_id=user_id),
@@ -402,6 +412,7 @@ class Engram:
             tags=typed_tags,
             include_lifecycle_states=_coerce_lifecycle_states(include_lifecycle_states),
             exclude_lifecycle_states=_coerce_lifecycle_states(exclude_lifecycle_states),
+            intent_confidence=intent_confidence,  # type: ignore[arg-type]
         )
 
     async def context(
@@ -492,6 +503,7 @@ class Engram:
                     for sq in subqueries
                 ]
             )
+
             ranked_lists = [[sf.fact.id for sf in lst] for lst in per_q]
             fused_ids = reciprocal_rank_fusion(ranked_lists, k=60)
             by_id: dict[UUID, ScoredFact] = {sf.fact.id: sf for lst in per_q for sf in lst}

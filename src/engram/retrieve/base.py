@@ -60,6 +60,12 @@ class RetrievalConfig(BaseModel):
         LifecycleState.SUPERSEDED,
     )
 
+    # Confidence-aware intent: when intent_confidence is low/medium and
+    # memory_systems is set, matching facts get a score boost instead of
+    # strict filtering. Set to 0 for no boost, >0 to add this weight
+    # to the combined score of any fact whose memory_system is in the filter.
+    intent_boost_weight: float = Field(default=0.15, ge=0.0, le=1.0)
+
 
 @runtime_checkable
 class Reranker(Protocol):

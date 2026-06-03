@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from datetime import UTC, datetime
+from typing import Literal
 from uuid import UUID
 
 from engram.embedding.base import EmbeddingProvider
@@ -13,6 +14,8 @@ from engram.retrieve.temporal import TemporalIntent, detect_temporal_intent
 from engram.scope import Scope
 from engram.store.base import EngramStore
 from engram.vector.base import VectorStore
+
+IntentConfidence = Literal["low", "medium", "high"]
 
 
 class HybridRetriever:
@@ -43,6 +46,7 @@ class HybridRetriever:
         tags: tuple[str, ...] | None = None,
         include_lifecycle_states: tuple[LifecycleState, ...] | None = None,
         exclude_lifecycle_states: tuple[LifecycleState, ...] | None = None,
+        intent_confidence: IntentConfidence | None = None,
     ) -> list[ScoredFact]:
         if not query.strip():
             return []
@@ -66,11 +70,15 @@ class HybridRetriever:
             active_exclude_lifecycle = tuple(
                 state for state in active_exclude_lifecycle if state not in active_include_lifecycle
             )
+
+        strict_filter = intent_confidence == "high" if intent_confidence is not None else True
+        boost_weight = cfg.intent_boost_weight if intent_confidence in ("low", "medium") else 0.0
+
         candidate_k = top_k * cfg.candidate_pool_multiplier
         if any(
             filter_value is not None
             for filter_value in (
-                active_memory_systems,
+                active_memory_systems if strict_filter else None,
                 active_memory_subtypes,
                 active_tags,
                 active_include_lifecycle,
@@ -96,7 +104,7 @@ class HybridRetriever:
             query,
             scope,
             limit=candidate_k,
-            memory_systems=active_memory_systems,
+            memory_systems=active_memory_systems if strict_filter else None,
             memory_subtypes=active_memory_subtypes,
             tags=active_tags,
             include_lifecycle_states=active_include_lifecycle,
@@ -122,7 +130,8 @@ class HybridRetriever:
             if cfg.exclude_superseded and fact.superseded_by is not None:
                 continue
             if (
-                active_memory_systems is not None
+                strict_filter
+                and active_memory_systems is not None
                 and fact.memory_system not in active_memory_systems
             ):
                 continue
@@ -153,7 +162,21 @@ class HybridRetriever:
                 if intent is not None
                 else 0.0
             )
-            final = cfg.vector_weight * vs + cfg.keyword_weight * ks + cfg.temporal_weight * ts
+
+            boost = 0.0
+            if (
+                boost_weight > 0
+                and active_memory_systems is not None
+                and fact.memory_system in active_memory_systems
+            ):
+                boost = boost_weight
+
+            final = (
+                cfg.vector_weight * vs
+                + cfg.keyword_weight * ks
+                + cfg.temporal_weight * ts
+                + boost
+            )
             scored.append(
                 ScoredFact(
                     fact=fact,
