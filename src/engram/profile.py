@@ -6,8 +6,8 @@ another without exposing raw work data.
 
 Safety invariants
 -----------------
-* promote() only extracts facts with ``promotion_state="promoted"`` or
-  ``promotion_state="candidate"`` — raw work facts never leave the source.
+* promote() only extracts facts with ``promotion_state="promoted"`` by default —
+  raw and candidate work facts never leave the source.
 * The exported JSON is a sanitised subset: ``text``, ``memory_system``,
   ``memory_subtype``, ``tags``, ``source_profile``. No IDs, no timestamps,
   no raw metadata.
@@ -23,8 +23,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import anyio
+
 from engram import Engram
-from engram.models import LifecycleState, MemorySystem, PromotionState
+from engram.models import MemorySystem
 
 # ---------------------------------------------------------------------------
 # config
@@ -85,7 +87,9 @@ class ProfileManager:
         raw = {"profiles": {n: p.to_dict() for n, p in self._profiles.items()}}
         path.write_text(json.dumps(raw, indent=2) + "\n")
 
-    def add(self, name: str, db: str, description: str = "", tags: list[str] | None = None) -> Profile:
+    def add(
+        self, name: str, db: str, description: str = "", tags: list[str] | None = None
+    ) -> Profile:
         p = Profile(name=name, db=db, description=description, tags=tuple(tags or []))
         self._profiles[name] = p
         self.save()
@@ -109,13 +113,13 @@ class ProfileManager:
         source: str,
         *,
         output: str | None = None,
-        states: tuple[str, ...] = ("promoted", "candidate"),
+        states: tuple[str, ...] = ("promoted",),
         generalize: bool = True,
     ) -> list[dict[str, Any]]:
         """Export generalised learnings from *source* profile.
 
         Only facts with ``promotion_state`` in *states* are included (default
-        ``promoted``, ``candidate``).  If *output* is provided the result is
+        ``promoted``).  If *output* is provided the result is
         written as JSON lines (one dict per line).  Returns the list of
         exported records.
         """
@@ -159,8 +163,10 @@ class ProfileManager:
                 )
 
         if output:
-            out_path = Path(os.path.expanduser(output))
-            out_path.write_text("\n".join(json.dumps(r) for r in records) + "\n")
+            payload = "\n".join(json.dumps(r) for r in records) + "\n"
+            await anyio.to_thread.run_sync(
+                lambda: Path(os.path.expanduser(output)).write_text(payload)
+            )
 
         return records
 
@@ -174,11 +180,13 @@ class ProfileManager:
         Returns how many facts were imported.
         """
         dst = self.get(target)
-        in_path = Path(os.path.expanduser(source_file))
         count = 0
+        content = await anyio.to_thread.run_sync(
+            lambda: Path(os.path.expanduser(source_file)).read_text()
+        )
 
         async with await Engram.open(dst.db_path) as memory:
-            for line in in_path.read_text().strip().splitlines():
+            for line in content.strip().splitlines():
                 if not line.strip():
                     continue
                 rec = json.loads(line)
@@ -203,7 +211,9 @@ class ProfileManager:
     # copy (direct DB-to-DB copy — same machine, same safety domain)
     # ------------------------------------------------------------------
 
-    async def copy_promoted(self, source: str, target: str, *, states: tuple[str, ...] = ("promoted",)) -> int:
+    async def copy_promoted(
+        self, source: str, target: str, *, states: tuple[str, ...] = ("promoted",)
+    ) -> int:
         """Directly copy promoted facts from *source* DB to *target* DB.
 
         Only runs when both profiles point to DBs on the same filesystem.
