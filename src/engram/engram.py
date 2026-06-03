@@ -383,6 +383,7 @@ class Engram:
         include_lifecycle_states: tuple[LifecycleState | str, ...] | None = None,
         exclude_lifecycle_states: tuple[LifecycleState | str, ...] | None = None,
         infer_memory_filters: bool = False,
+        allow_sensitive_recall: bool = False,
     ) -> list[ScoredFact]:
         """Hybrid (vector + keyword) retrieval, optionally reranked.
 
@@ -392,6 +393,11 @@ class Engram:
         - ``high`` confidence → strict system/subtype/tag filtering (current behavior).
         - ``low`` / ``medium`` confidence → matching facts get a score boost
           but non-matching facts are still included (soft boost).
+
+        ``allow_sensitive_recall``: when True, facts with
+        ``retrieval_policy="explicit_only"`` are included even without
+        explicit subtype/tag filters. Default False (sensitive vault facts
+        are excluded unless the caller provides specific filters).
         """
         typed_systems = _coerce_memory_systems(memory_systems)
         typed_subtypes = memory_subtypes
@@ -413,6 +419,7 @@ class Engram:
             include_lifecycle_states=_coerce_lifecycle_states(include_lifecycle_states),
             exclude_lifecycle_states=_coerce_lifecycle_states(exclude_lifecycle_states),
             intent_confidence=intent_confidence,  # type: ignore[arg-type]
+            allow_sensitive_recall=allow_sensitive_recall,
         )
 
     async def context(
@@ -431,6 +438,7 @@ class Engram:
         include_lifecycle_states: tuple[LifecycleState | str, ...] | None = None,
         exclude_lifecycle_states: tuple[LifecycleState | str, ...] | None = None,
         infer_memory_filters: bool = False,
+        allow_sensitive_recall: bool = False,
     ) -> str:
         """Assemble a context string from top-N facts that fit `token_budget`.
 
@@ -484,6 +492,7 @@ class Engram:
                 include_lifecycle_states=include_lifecycle,
                 exclude_lifecycle_states=exclude_lifecycle,
                 infer_memory_filters=False,
+                allow_sensitive_recall=allow_sensitive_recall,
             )
         else:
             per_q = await asyncio.gather(
@@ -499,6 +508,7 @@ class Engram:
                         include_lifecycle_states=include_lifecycle,
                         exclude_lifecycle_states=exclude_lifecycle,
                         infer_memory_filters=False,
+                        allow_sensitive_recall=allow_sensitive_recall,
                     )
                     for sq in subqueries
                 ]

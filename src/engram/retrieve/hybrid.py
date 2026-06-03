@@ -47,6 +47,7 @@ class HybridRetriever:
         include_lifecycle_states: tuple[LifecycleState, ...] | None = None,
         exclude_lifecycle_states: tuple[LifecycleState, ...] | None = None,
         intent_confidence: IntentConfidence | None = None,
+        allow_sensitive_recall: bool = False,
     ) -> list[ScoredFact]:
         if not query.strip():
             return []
@@ -153,6 +154,13 @@ class HybridRetriever:
                 allowed_sessions is not None
                 and fact.session_id is not None
                 and fact.session_id not in allowed_sessions
+            ):
+                continue
+            if (
+                not allow_sensitive_recall
+                and fact.retrieval_policy == "explicit_only"
+                and not active_memory_subtypes
+                and not active_tags
             ):
                 continue
             vs = vec_scores.get(fid, 0.0)

@@ -29,6 +29,7 @@ def build_mcp_server(engram: Engram, name: str = "engram") -> Any:
             "memory_subtypes": {"type": "array", "items": {"type": "string"}},
             "tags": {"type": "array", "items": {"type": "string"}},
             "infer_memory_filters": {"type": "boolean", "default": False},
+            "allow_sensitive_recall": {"type": "boolean", "default": False},
         }
         return [
             Tool(
@@ -110,6 +111,7 @@ def build_mcp_server(engram: Engram, name: str = "engram") -> Any:
                 memory_subtypes=_tuple_arg(arguments.get("memory_subtypes")),
                 tags=_tuple_arg(arguments.get("tags")),
                 infer_memory_filters=arguments.get("infer_memory_filters", False),
+                allow_sensitive_recall=arguments.get("allow_sensitive_recall", False),
             )
             lines = [f"- [score={sf.score:.3f}] {sf.fact.text}" for sf in results]
             return [TextContent(type="text", text="\n".join(lines) or "(no matches)")]
@@ -124,6 +126,7 @@ def build_mcp_server(engram: Engram, name: str = "engram") -> Any:
                 memory_subtypes=_tuple_arg(arguments.get("memory_subtypes")),
                 tags=_tuple_arg(arguments.get("tags")),
                 infer_memory_filters=arguments.get("infer_memory_filters", False),
+                allow_sensitive_recall=arguments.get("allow_sensitive_recall", False),
             )
             return [TextContent(type="text", text=ctx)]
 
